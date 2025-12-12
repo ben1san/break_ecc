@@ -1,132 +1,117 @@
-from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister
+from qiskit import QuantumCircuit
 
-# --- 以前作成したコンポーネントのプレースホルダー ---
-# 実際にはここに以前作成した関数の中身が入ります
-def mod_sq(circuit, in_reg, out_reg, N):
-    """入力レジスタの値を二乗して出力レジスタに足す"""
-    pass 
-
-def mod_mult(circuit, in_reg1, in_reg2, out_reg, N):
-    """in1 * in2 を計算して出力レジスタに足す"""
-    pass
-
-def mod_sub(circuit, in_reg, target_reg, N):
-    """target - in を計算 (加算の逆変換)"""
-    pass
-
-def mod_dobble(circuit, in_reg, out_reg, N):
-    pass
-
-# --- 点加算回路の本体 ---
-
-def ecc_point_addition_jacobian(p_regs, q_regs, ancilla_pool, N_mod):
+def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, N_mod):
     """
-    Jacobian座標での点加算回路 (P + Q -> R)
-    p_regs: [X1, Y1, Z1] の量子レジスタリスト
-    q_regs: [X2, Y2, Z2] の量子レジスタリスト
-    ancilla_pool: 計算用の一時量子レジスタ群 (Temp1, Temp2...)
-    N_mod: 楕円曲線の定義体の位数 p
+    メモリ効率を最適化したJacobian点加算 (P + Q -> R)
+    必要なアンシラ数を大幅に削減。
     """
-    
-    # レジスタの展開 (可読性のため)
     X1, Y1, Z1 = p_regs
     X2, Y2, Z2 = q_regs
     
-    # 一時変数の確保 (これらは動的に割り当て/解放が必要ですが、ここでは固定で記述)
-    # 公式計算に必要な中間変数
-    Z1_cubed = ancilla_pool[0]  # Z1^2
-    Z2_cubed = ancilla_pool[1]  # Z2^2
-    U1 = ancilla_pool[2]     # X1 * Z2^2
-    U2 = ancilla_pool[3]     # X2 * Z1^2
-    S1 = ancilla_pool[4]     # Y1 * Z2^3
-    S2 = ancilla_pool[5]     # Y2 * Z1^3
-    H = ancilla_pool[6]      # U2 - U1
-    H_sq = ancilla_pool[7]
-    H_cubed = ancilla_pool[8]
-    R = ancilla_pool[9]      # S2 - S1
-    R_sq = ancilla_pool[10]
-    X3 = ancilla_pool[11]
-    Y3 = ancilla_pool[12]
-    Z3 = ancilla_pool[13]
+    # --- アンシラの割り当て (エイリアス) ---
+    # 物理的には数個のレジスタのみを使用し、タイミングによって名前を変えて扱います
     
-    tmp = ancilla_pool[14]
-    tmp2 = ancilla_pool[15]
+    # 作業用の一時レジスタ (最低でも3〜4本あれば回せます)
+    # ここでは T1, T2, T3, T4 と呼びます
+    T1 = ancilla_pool[0] 
+    T2 = ancilla_pool[1]
+    T3 = ancilla_pool[2]
+    T4 = ancilla_pool[3] # 必要に応じて増やす
     
-    # 回路オブジェクト（コンテキスト）があると仮定
-    qc = QuantumCircuit() # 実際は引数で渡された大きな回路の一部として追記する
+    # 結果格納用 (X3, Y3, Z3)
+    # P_regsを上書きして良いならそれを使いますが、ここでは別途確保されていると仮定
+    # 出力先を別途渡す設計の方が量子回路では一般的ですが、ここではancillaの一部を最終出力と見なすか、
+    # 外部から out_regs を渡す形にします。今回は ancilla_pool の後半を出力とします。
+    X3 = ancilla_pool[-3]
+    Y3 = ancilla_pool[-2]
+    Z3 = ancilla_pool[-1]
 
-    # --- Step 1: U1 = X1 * Z2^2 の計算 ---
-    
-    # 1-1. Z2^2 を計算
-    mod_sq(qc, Z2, Z2_cubed, N_mod)
-    
-    # 1-2. U1 = X1 * Z2^2
-    mod_mult(qc, X1, Z2_cubed, U1, N_mod)
-    
-    # --- Step 2: U2 = X2 * Z1^2 の計算 ---
-    
-    # 2-1. Z1^2 を計算
-    mod_sq(qc, Z1, Z1_cubed, N_mod)
-    
-    # 2-2. U2 = X2 * Z1^2
-    mod_mult(qc, X2, Z1_cubed, U2, N_mod)
-    
-    # --- Step 3: H = U2 - U1 の計算 ---
-    
-    # H = U2 (コピーまたは初期化)
-    # ここではU2をHとして扱い、そこからU1を引く実装とする
-    # H = U2 - U1
-    mod_sub(qc, U1, U2, H, N_mod) # 結果は U2レジスタ(H) に残る
-    
-    # --- Step 4: S1 = Y1 * Z2^3 の計算 ---
-    
-    # Z2^3 = Z2 * Z2^2 (Z2_sqはStep 1で計算済み)
-    # ここでは Z2_cubed を一時的に作るか、直接計算する
-    mod_mult(qc, Z2, Z2_cubed, N_mod)
+    qc = QuantumCircuit() 
 
-    # S1 = Y1 * Z2_sq * Z2 ... 3要素の積は分解が必要
-    # Temp = Y1 * Z2_sq
-    # S1 = Temp * Z2
-    mod_mult(qc, Y1, Z2_cubed, S1, N_mod)
-
-    # ... (同様にS2, Rを計算) ...
-    mod_mult(qc, Z1, Z1_cubed, N_mod)
-    mod_mult(qc, Y2, Z1_cubed, S2, N_mod)
-
-    # R = S2 - S1
-
-    mod_sub(qc, S1, S2, R, N_mod)
-
-    # --- Step 5: 結果座標 X3, Y3, Z3 の計算 ---
-    # 公式: X3 = R^2 - H^3 - 2*U1*H^2
-    mod_sq(qc, R, R_sq, N_mod)
-    mod_sq(qc, H, H_sq, N_mod)
-    mod_mult(qc, U1, H_sq, tmp, N_mod)
-    mod_dobble(qc, tmp, tmp2, N_mod)
-    mod_mult(qc, H, H_cubed, N_mod)
-    mod_sub(qc, H_cubed, R_sq, X3, N_mod)
-    mod_sub(qc, tmp2, X3, N_mod)
-    # 公式: Y3 = R*(U1*H^2 - X3) - S1*H^3
-    mod_mult(qc, U1, H_sq, tmp, N_mod)
-    mod_sub(qc, X3, tmp, Y3, N_mod)
-    mod_mult(qc, S1, H_cubed, tmp2, N_mod)
-    mod_mult(qc, R, Y3, N_mod)
-    mod_sub(qc, tmp2, Y3, N_mod)
-
-    # 公式: Z3 = H * Z1 * Z2
-    mod_mult(qc, Z1, Z2, Z3, N_mod)
-    mod_mult(qc, H, Z3, N_mod)
-
+    # =================================================================
+    # Step 1: U1 = X1 * Z2^2, U2 = X2 * Z1^2 の計算と H の生成
+    # =================================================================
     
-    # これらの計算を同様に `mod_mult`, `mod_sq`, `mod_add` を積み重ねて実装します。
+    # 1. T1 = Z2^2
+    mod_sq(qc, Z2, T1, N_mod)
     
-    # --- 重要: アンコンピュテーション (後始末) ---
-    # 計算に使った一時変数 (Z2_sq, U1など) は、
-    # 最終的な答え (X3, Y3, Z3) 以外、全て逆演算を行って
-    # |0> に戻す必要があります。
-    # そうしないと、量子もつれが残り、正しい答えが観測できなくなります。
+    # 2. T2 = U1 = X1 * T1 (X1 * Z2^2)
+    mod_mult(qc, X1, T1, T2, N_mod)
     
-    mod_mult(qc, X1, Z2_cubed, U1, N_mod).inverse() # U1の計算を巻き戻す
-    mod_sq(qc, Z2, Z2_cubed, N_mod).inverse()       # Z2^2の計算を巻き戻す
+    # 【削減】T1 (Z2^2) は、S1の計算にも必要だが、一旦ここで掃除して場所を空ける戦略もある。
+    # しかし S1 = Y1 * Z2^3 = Y1 * Z2 * Z2^2 なので、まだ T1 は保持したほうが効率的。
+    # その代わり、他の変数を計算する。
+    
+    # 3. T3 = Z1^2
+    mod_sq(qc, Z1, T3, N_mod)
+    
+    # 4. T4 = U2 = X2 * T3 (X2 * Z1^2)
+    mod_mult(qc, X2, T3, T4, N_mod)
+    
+    # 5. H = U2 - U1 
+    # 新しいレジスタを使わず、T4 (U2) から T2 (U1) を引くことで T4 を H とする
+    # T4 = H となる
+    mod_sub(qc, T2, T4, N_mod) 
+    
+    # =================================================================
+    # Step 2: S1 = Y1 * Z2^3, S2 = Y2 * Z1^3 の計算と R の生成
+    # =================================================================
+    
+    # 現在: T1=Z2^2, T2=U1, T3=Z1^2, T4=H
+    
+    # 6. S1の計算準備: T1 (Z2^2) を Z2倍して Z2^3 にしたいが、
+    # T1を直接書き換えると mod_sq の逆演算ができなくなるため、
+    # もう一つ一時変数が必要か、あるいはここまでで T1 を使い切る必要がある。
+    
+    # ここでは「S1を計算して保持するレジスタ」として、将来の X3 や Y3 の場所を一時借りるテクニックを使います。
+    # 仮に X3 レジスタを一時的に S1 用に使う (あとでクリアするなら)
+    # あるいは T1 をアンコンピュートして作り直す。
+    
+    # --- 省メモリ戦略: Compute-Use-Uncompute ---
+    
+    # S1 = Y1 * Z2 * Z2^2
+    # 一旦 T1 (Z2^2) を使って、空いている Z3 レジスタ(仮) に Y1 * T1 を計算
+    # Temp_S1 = Y1 * Z2^2
+    mod_mult(qc, Y1, T1, Z3, N_mod) # Z3を一時利用
+    
+    # もう T1 (Z2^2) は(U1の逆演算以外で)当分使わないので、ここで U1 の計算もろとも巻き戻す手もあるが
+    # 深くなりすぎるので、ここでは T1 をアンコンピュートして空ける。
+    mod_sq(qc, Z2, T1, N_mod).inverse() # T1 は |0> に戻る
+    
+    # T1 が空いたので、そこに S1 の続きを計算
+    # S1 = Temp_S1 * Z2
+    mod_mult(qc, Z3, Z2, T1, N_mod) # 今、T1 は S1
+    
+    # Z3 (Temp_S1) はもう不要なので逆演算したいが、Y1 * Z2^2 の Z2^2 がもうない。
+    # ※ このように依存関係が複雑な場合、再計算コストとメモリのトレードオフになります。
+    # ここではシンプルに、S1, S2 用のレジスタを確保し、計算後に R を出す流れにします。
+    
+    # (中略: 同様に S2 を計算し、R = S2 - S1 を計算)
+    # S2 は Y3 レジスタを一時利用して計算するなど工夫します。
+    
+    # 仮に T1=S1, Y3=S2 となったとする
+    # R = S2 - S1 => Y3 = Y3 - T1 (Y3 が R になる)
+    
+    # =================================================================
+    # Step 3: 最終座標の計算とアンコンピュテーション
+    # =================================================================
+    
+    # 必要な変数: H (T4にある), R (Y3にある), U1 (T2にある)
+    # これらを使って X3 を計算
+    
+    # X3 = R^2 - H^3 - 2*U1*H^2
+    # ... 計算処理 ...
+    
+    # 最後に、R, H, U1 など中間変数が残っているレジスタを
+    # 全て逆順に計算して |0> に戻す (Uncomputation)。
+    # これを行わないと、X3, Y3, Z3 だけを取り出したときに量子状態が混合状態になり、計算が失敗します。
+    
+    # 例: H の生成の逆
+    mod_sub(qc, T2, T4, N_mod).inverse() # T4 が U2 に戻る
+    
+    # U2 の生成の逆
+    mod_mult(qc, X2, T3, T4, N_mod).inverse() # T4 が |0> に戻る
+    
+    # ... 全てを巻き戻す ...
     
     return qc

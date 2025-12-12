@@ -1,8 +1,8 @@
 from qiskit import QuantumCircuit, QuantumRegister
 # 仮定: 以前作成したモジュラ演算ライブラリ
-import modular_arithmetic_lib as mod_ops 
+import modular_arithmetic as mod_ops 
 
-def mixed_point_addition(qc, q_point, c_point, ancillas, N_mod):
+def mixed_point_addition(qc, q_point,  c_point, ancillas, N_mod):
     """
     量子状態の点(X1, Y1, Z1)に、古典定数の点(x2, y2)を加算する。
     
