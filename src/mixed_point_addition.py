@@ -1,6 +1,6 @@
 from qiskit import QuantumCircuit, QuantumRegister
 # 仮定: 以前作成したモジュラ演算ライブラリ
-import modular_arithmetic as mod_ops 
+from modular_arithmetic as mod_ops 
 
 def mixed_point_addition(qc, q_point,  c_point, ancillas, N_mod):
     """

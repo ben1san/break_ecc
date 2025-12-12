@@ -1,4 +1,5 @@
 from qiskit import QuantumCircuit
+import modular_arithmetic as ops
 
 def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, N_mod):
     """
@@ -33,25 +34,25 @@ def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, N_mod):
     # =================================================================
     
     # 1. T1 = Z2^2
-    mod_sq(qc, Z2, T1, N_mod)
+    ops.modular_square(qc, Z2, T1, N_mod)
     
     # 2. T2 = U1 = X1 * T1 (X1 * Z2^2)
-    mod_mult(qc, X1, T1, T2, N_mod)
+    ops.modular_multiplier(qc, X1, T1, T2, N_mod)
     
     # 【削減】T1 (Z2^2) は、S1の計算にも必要だが、一旦ここで掃除して場所を空ける戦略もある。
     # しかし S1 = Y1 * Z2^3 = Y1 * Z2 * Z2^2 なので、まだ T1 は保持したほうが効率的。
     # その代わり、他の変数を計算する。
     
     # 3. T3 = Z1^2
-    mod_sq(qc, Z1, T3, N_mod)
+    ops.modular_square(qc, Z1, T3, N_mod)
     
     # 4. T4 = U2 = X2 * T3 (X2 * Z1^2)
-    mod_mult(qc, X2, T3, T4, N_mod)
+    ops.modular_multiplier(qc, X2, T3, T4, N_mod)
     
     # 5. H = U2 - U1 
     # 新しいレジスタを使わず、T4 (U2) から T2 (U1) を引くことで T4 を H とする
     # T4 = H となる
-    mod_sub(qc, T2, T4, N_mod) 
+    ops.modular_substractor(qc, T2, T4, N_mod) 
     
     # =================================================================
     # Step 2: S1 = Y1 * Z2^3, S2 = Y2 * Z1^3 の計算と R の生成
@@ -72,15 +73,15 @@ def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, N_mod):
     # S1 = Y1 * Z2 * Z2^2
     # 一旦 T1 (Z2^2) を使って、空いている Z3 レジスタ(仮) に Y1 * T1 を計算
     # Temp_S1 = Y1 * Z2^2
-    mod_mult(qc, Y1, T1, Z3, N_mod) # Z3を一時利用
+    ops.modular_multiplier(qc, Y1, T1, Z3, N_mod) # Z3を一時利用
     
     # もう T1 (Z2^2) は(U1の逆演算以外で)当分使わないので、ここで U1 の計算もろとも巻き戻す手もあるが
     # 深くなりすぎるので、ここでは T1 をアンコンピュートして空ける。
-    mod_sq(qc, Z2, T1, N_mod).inverse() # T1 は |0> に戻る
+    ops.modular_square(qc, Z2, T1, N_mod).inverse() # T1 は |0> に戻る
     
     # T1 が空いたので、そこに S1 の続きを計算
     # S1 = Temp_S1 * Z2
-    mod_mult(qc, Z3, Z2, T1, N_mod) # 今、T1 は S1
+    ops.modular_multiplier(qc, Z3, Z2, T1, N_mod) # 今、T1 は S1
     
     # Z3 (Temp_S1) はもう不要なので逆演算したいが、Y1 * Z2^2 の Z2^2 がもうない。
     # ※ このように依存関係が複雑な場合、再計算コストとメモリのトレードオフになります。
@@ -107,10 +108,10 @@ def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, N_mod):
     # これを行わないと、X3, Y3, Z3 だけを取り出したときに量子状態が混合状態になり、計算が失敗します。
     
     # 例: H の生成の逆
-    mod_sub(qc, T2, T4, N_mod).inverse() # T4 が U2 に戻る
+    ops.modular_substractor(qc, T2, T4, N_mod).inverse() # T4 が U2 に戻る
     
     # U2 の生成の逆
-    mod_mult(qc, X2, T3, T4, N_mod).inverse() # T4 が |0> に戻る
+    ops.modular_multiplier(qc, X2, T3, T4, N_mod).inverse() # T4 が |0> に戻る
     
     # ... 全てを巻き戻す ...
     
