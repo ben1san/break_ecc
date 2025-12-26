@@ -1,118 +1,126 @@
 from qiskit import QuantumCircuit
 import modular_arithmetic as ops
 
-def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, N_mod):
+def ecc_point_addition_jacobian_optimized(p_regs, q_regs, ancilla_pool, out_regs, N_mod):
     """
-    メモリ効率を最適化したJacobian点加算 (P + Q -> R)
-    必要なアンシラ数を大幅に削減。
+    P(X1,Y1,Z1) + Q(X2,Y2,Z2) -> Out(X3,Y3,Z3)
     """
     X1, Y1, Z1 = p_regs
     X2, Y2, Z2 = q_regs
+    X3, Y3, Z3 = out_regs  # 出力先はCleanな|0>状態と仮定
     
-    # --- アンシラの割り当て (エイリアス) ---
-    # 物理的には数個のレジスタのみを使用し、タイミングによって名前を変えて扱います
+    # 作業用アンシラ (名前を機能ごとにマッピング)
+    # 必要な変数を保持する場所
+    U1_reg = ancilla_pool[0]
+    S1_reg = ancilla_pool[1]
+    H_reg  = ancilla_pool[2] # 兼 U2置き場
+    R_reg  = ancilla_pool[3] # 兼 S2置き場
     
-    # 作業用の一時レジスタ (最低でも3〜4本あれば回せます)
-    # ここでは T1, T2, T3, T4 と呼びます
-    T1 = ancilla_pool[0] 
-    T2 = ancilla_pool[1]
-    T3 = ancilla_pool[2]
-    T4 = ancilla_pool[3] # 必要に応じて増やす
+    # 一時計算用 (Temp) - 計算のたびに使いまわして即座に掃除する場所
+    T1 = ancilla_pool[4] 
     
-    # 結果格納用 (X3, Y3, Z3)
-    # P_regsを上書きして良いならそれを使いますが、ここでは別途確保されていると仮定
-    # 出力先を別途渡す設計の方が量子回路では一般的ですが、ここではancillaの一部を最終出力と見なすか、
-    # 外部から out_regs を渡す形にします。今回は ancilla_pool の後半を出力とします。
-    X3 = ancilla_pool[-3]
-    Y3 = ancilla_pool[-2]
-    Z3 = ancilla_pool[-1]
+    qc = QuantumCircuit()
+    
+    # =================================================================
+    # Sub-routine 1: 中間値 H, U1 の生成
+    # =================================================================
+    def compute_H_U1():
+        # 1. T1 = Z2^2
+        ops.modular_square(qc, Z2, T1, N_mod)
+        # 2. U1 = X1 * T1
+        ops.modular_multiplier(qc, X1, T1, U1_reg, N_mod)
+        
+        # 3. T1 (Z2^2) は S1計算(Y1*Z2^3)でも使うため、ここではまだ消さない戦略もあるが、
+        #    メモリがかつかつなら、ここで一度 T1 を Z2 からアンコンピュートする。
+        #    ここでは「S1計算用に再利用する」ルートをとる。
+        
+        # 4. H (U2) の計算
+        #    U2 = X2 * Z1^2.  まずは T1 を Z1^2 に書き換えたいが、Z2^2が入ってる。
+        #    -> S1計算を先にやる順序変更も手だが、まずは教科書通りいく。
+        #    一旦 T1 をクリア (inverse compute)
+        ops.modular_square(qc, Z2, T1, N_mod).inverse()
+        
+        # 改めて T1 = Z1^2
+        ops.modular_square(qc, Z1, T1, N_mod)
+        # H_reg = U2 = X2 * T1
+        ops.modular_multiplier(qc, X2, T1, H_reg, N_mod)
+        # T1 をクリア
+        ops.modular_square(qc, Z1, T1, N_mod).inverse()
+        
+        # H = U2 - U1
+        ops.modular_substractor(qc, U1_reg, H_reg, N_mod)
+        
+    # =================================================================
+    # Sub-routine 2: 中間値 R, S1 の生成
+    # =================================================================
+    def compute_R_S1():
+        # S1 = Y1 * Z2^3
+        # T1 = Z2^2
+        ops.modular_square(qc, Z2, T1, N_mod)
+        # S1 = Y1 * T1 (ここで S1 = Y1 * Z2^2)
+        ops.modular_multiplier(qc, Y1, T1, S1_reg, N_mod)
+        # S1 = S1 * Z2 (これで S1 = Y1 * Z2^3)
+        ops.modular_multiplier(qc, Z2, S1_reg, S1_reg, N_mod) # in-place乗算が可能と仮定、不可ならもう1つ必要
+        
+        # T1 (Z2^2) をクリア
+        ops.modular_square(qc, Z2, T1, N_mod).inverse()
+        
+        # 同様に S2 = Y2 * Z1^3 を R_reg に作る
+        ops.modular_square(qc, Z1, T1, N_mod) # T1 = Z1^2
+        ops.modular_multiplier(qc, Y2, T1, R_reg, N_mod) # R = Y2 * Z1^2
+        ops.modular_multiplier(qc, Z1, R_reg, R_reg, N_mod) # R = Y2 * Z1^3
+        ops.modular_square(qc, Z1, T1, N_mod).inverse() # Clear T1
+        
+        # R = S2 - S1
+        ops.modular_substractor(qc, S1_reg, R_reg, N_mod)
 
-    qc = QuantumCircuit() 
+    # =================================================================
+    # Main Sequence
+    # =================================================================
 
-    # =================================================================
-    # Step 1: U1 = X1 * Z2^2, U2 = X2 * Z1^2 の計算と H の生成
-    # =================================================================
+    # 1. 前処理: 足場を作る
+    compute_H_U1() # 結果: U1_reg, H_reg が埋まる
+    compute_R_S1() # 結果: S1_reg, R_reg が埋まる
     
-    # 1. T1 = Z2^2
-    ops.modular_square(qc, Z2, T1, N_mod)
+    # ----------------------------------------------------
+    # 2. 最終結果の計算 (X3, Y3, Z3)
+    #    ここは U1, S1, H, R は Read-Only として扱い、
+    #    結果を X3, Y3, Z3 レジスタに蓄積します。
+    # ----------------------------------------------------
     
-    # 2. T2 = U1 = X1 * T1 (X1 * Z2^2)
-    ops.modular_multiplier(qc, X1, T1, T2, N_mod)
+    # --- Z3 = Z1 * Z2 * H ---
+    # まだ Z1, Z2 は生存しているので計算可能
+    ops.modular_multiplier(qc, Z1, Z2, T1, N_mod) # T1 = Z1*Z2
+    ops.modular_multiplier(qc, H_reg, T1, Z3, N_mod) # Z3 = H * T1
+    ops.modular_multiplier(qc, Z1, Z2, T1, N_mod).inverse() # T1 clear
     
-    # 【削減】T1 (Z2^2) は、S1の計算にも必要だが、一旦ここで掃除して場所を空ける戦略もある。
-    # しかし S1 = Y1 * Z2^3 = Y1 * Z2 * Z2^2 なので、まだ T1 は保持したほうが効率的。
-    # その代わり、他の変数を計算する。
+    # --- X3 = R^2 - H^3 - 2*U1*H^2 ---
+    # (ここは長いので省略しますが、T1などを使い回して計算し、結果を X3 に入れる)
+    # ポイント: U1, H, R はまだ書き換えない！
     
-    # 3. T3 = Z1^2
-    ops.modular_square(qc, Z1, T3, N_mod)
+    ops.modular_square(qc, H_reg, T1, N_mod)
+    ops.modular_multiplier(qc, H_reg, T1, N_mod)
+    ops.modular_square(qc, R_reg, )
+
+    # --- Y3 = R(U1*H^2 - X3) - S1*H^3 ---
+    # ポイント: X3 は完成しているので入力として使える。S1 もここで使う。
     
-    # 4. T4 = U2 = X2 * T3 (X2 * Z1^2)
-    ops.modular_multiplier(qc, X2, T3, T4, N_mod)
+    # ----------------------------------------------------
+    # 3. 後処理 (Uncomputation): 足場を崩す
+    #    作った順番と「完全に逆」の順番で消していく
+    # ----------------------------------------------------
     
-    # 5. H = U2 - U1 
-    # 新しいレジスタを使わず、T4 (U2) から T2 (U1) を引くことで T4 を H とする
-    # T4 = H となる
-    ops.modular_substractor(qc, T2, T4, N_mod) 
+    # compute_R_S1 の逆操作
+    # Pythonの関数として定義しておけば、全く同じロジックの .inverse() を呼ぶだけで済む
+    # ただし、Qiskitの命令単位で反転させる必要があります。
     
-    # =================================================================
-    # Step 2: S1 = Y1 * Z2^3, S2 = Y2 * Z1^3 の計算と R の生成
-    # =================================================================
+    # 手動で書くなら：
+    ops.modular_substractor(qc, S1_reg, R_reg, N_mod).inverse() # R = S2 に戻る
+    # ... (S2の生成の逆) ...
+    # ... (S1の生成の逆) ...
     
-    # 現在: T1=Z2^2, T2=U1, T3=Z1^2, T4=H
-    
-    # 6. S1の計算準備: T1 (Z2^2) を Z2倍して Z2^3 にしたいが、
-    # T1を直接書き換えると mod_sq の逆演算ができなくなるため、
-    # もう一つ一時変数が必要か、あるいはここまでで T1 を使い切る必要がある。
-    
-    # ここでは「S1を計算して保持するレジスタ」として、将来の X3 や Y3 の場所を一時借りるテクニックを使います。
-    # 仮に X3 レジスタを一時的に S1 用に使う (あとでクリアするなら)
-    # あるいは T1 をアンコンピュートして作り直す。
-    
-    # --- 省メモリ戦略: Compute-Use-Uncompute ---
-    
-    # S1 = Y1 * Z2 * Z2^2
-    # 一旦 T1 (Z2^2) を使って、空いている Z3 レジスタ(仮) に Y1 * T1 を計算
-    # Temp_S1 = Y1 * Z2^2
-    ops.modular_multiplier(qc, Y1, T1, Z3, N_mod) # Z3を一時利用
-    
-    # もう T1 (Z2^2) は(U1の逆演算以外で)当分使わないので、ここで U1 の計算もろとも巻き戻す手もあるが
-    # 深くなりすぎるので、ここでは T1 をアンコンピュートして空ける。
-    ops.modular_square(qc, Z2, T1, N_mod).inverse() # T1 は |0> に戻る
-    
-    # T1 が空いたので、そこに S1 の続きを計算
-    # S1 = Temp_S1 * Z2
-    ops.modular_multiplier(qc, Z3, Z2, T1, N_mod) # 今、T1 は S1
-    
-    # Z3 (Temp_S1) はもう不要なので逆演算したいが、Y1 * Z2^2 の Z2^2 がもうない。
-    # ※ このように依存関係が複雑な場合、再計算コストとメモリのトレードオフになります。
-    # ここではシンプルに、S1, S2 用のレジスタを確保し、計算後に R を出す流れにします。
-    
-    # (中略: 同様に S2 を計算し、R = S2 - S1 を計算)
-    # S2 は Y3 レジスタを一時利用して計算するなど工夫します。
-    
-    # 仮に T1=S1, Y3=S2 となったとする
-    # R = S2 - S1 => Y3 = Y3 - T1 (Y3 が R になる)
-    
-    # =================================================================
-    # Step 3: 最終座標の計算とアンコンピュテーション
-    # =================================================================
-    
-    # 必要な変数: H (T4にある), R (Y3にある), U1 (T2にある)
-    # これらを使って X3 を計算
-    
-    # X3 = R^2 - H^3 - 2*U1*H^2
-    # ... 計算処理 ...
-    
-    # 最後に、R, H, U1 など中間変数が残っているレジスタを
-    # 全て逆順に計算して |0> に戻す (Uncomputation)。
-    # これを行わないと、X3, Y3, Z3 だけを取り出したときに量子状態が混合状態になり、計算が失敗します。
-    
-    # 例: H の生成の逆
-    ops.modular_substractor(qc, T2, T4, N_mod).inverse() # T4 が U2 に戻る
-    
-    # U2 の生成の逆
-    ops.modular_multiplier(qc, X2, T3, T4, N_mod).inverse() # T4 が |0> に戻る
-    
-    # ... 全てを巻き戻す ...
-    
+    # compute_H_U1 の逆操作
+    # ... (Hの生成の逆) ...
+    # ... (U1の生成の逆) ...
+
     return qc
