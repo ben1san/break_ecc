@@ -1,6 +1,6 @@
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit_aer import AerSimulator
-from src.arithmetic import ModularArithmetic
+from general.arithmetic import ModularArithmetic
 
 def run_test(test_name, qc, output_reg, expected_mod, N):
     print(f"--- {test_name} ---")

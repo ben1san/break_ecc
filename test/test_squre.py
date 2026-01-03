@@ -1,7 +1,7 @@
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile # ← transpileを追加
 from qiskit_aer import AerSimulator
 from qiskit.visualization import plot_histogram
-from arithmetic import ModularArithmetic
+from general.arithmetic import ModularArithmetic
 
 def test_square_and_uncompute():
     # パラメータ設定 (Bit size 4)

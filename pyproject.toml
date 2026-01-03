@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "matplotlib>=3.10.8",
     "numpy>=2.3.5",
+    "pandas>=2.3.3",
     "pylatexenc>=2.10",
     "qiskit>=2.2.3",
     "qiskit-aer>=0.17.2",

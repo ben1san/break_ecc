@@ -1,7 +1,7 @@
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit_aer import AerSimulator
-from src.arithmetic import ModularArithmetic
-from src.ecc import QuantumECC, ScalarMultiplication
+from general.arithmetic import ModularArithmetic
+from general.ecc import QuantumECC, ScalarMultiplication
 
 # --- パラメータ設定 ---
 N = 13          

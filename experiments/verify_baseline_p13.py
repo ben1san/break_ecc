@@ -1,3 +1,8 @@
+import sys
+import os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
 import time
 import operator
 import warnings
@@ -8,8 +13,8 @@ from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, transpile
 from qiskit.circuit.library import QFTGate  # 修正: QFTクラスではなくQFTGateを使用
 from qiskit_aer import AerSimulator
 
-from arithmetic import ModularArithmetic
-from ecc import QuantumECC, ScalarMultiplication
+from src.general.arithmetic import ModularArithmetic
+from src.general.ecc import QuantumECC, ScalarMultiplication
 
 # --- 1. ショアのアルゴリズム統合クラス ---
 class ShorECDLP:
@@ -143,44 +148,45 @@ class ShorPostProcessor:
         return None
 
 # --- 3. メインルーチン ---
-def verify_small_scale():
-    case = {
-        "name": "Custom Small Test (p=7)",
-        "p": 7, 
-        "order": 3, 
-        "n_qubits": 3,   # 3ビットに削減 (アンシラも 3*8=24 に減る)
-        "G": (3, 1), 
-        "Q": (3, 1),     # Q = 1*P
-        "true_d": 1,
-        "ctrl_bits": 3   # 制御ビットも減らす
-    }
+def verify_qday():
+    test_cases = [
+        {
+            "name": "Bit size 4",
+            "p": 13, "order": 7, "n_qubits": 4, 
+            "G": (11, 5), "Q": (11, 8), "true_d": 6,
+            "ctrl_bits": 5  # 修正: 3 -> 5 に増加
+        }
+    ]
 
-    print(f"\n=== Testing {case['name']} ===")
-    
-    arith = ModularArithmetic(case['p'], case['n_qubits'])
-    ecc = QuantumECC(arith)
-    
-    # カーブパラメータ y^2 = x^3 + a*x + b
-    # ここでは y^2 = x^3 + 2 (mod 7) を使用
-    sm = ScalarMultiplication(ecc, arith, a=0) 
-    shor = ShorECDLP(sm, case['p'])
-    
-    print("Constructing circuit...")
-    qc = shor.construct_circuit(case['ctrl_bits'], case['G'], case['Q'])
-    
-    simulator = AerSimulator(method='matrix_product_state')
-    print("Transpiling...")
-    # optimization_level=0 にするとトランスパイルが速くなります（回路は冗長になりますが）
-    t_qc = transpile(qc, simulator, optimization_level=0)
-    
-    print(f"Running simulation (Depth: {t_qc.depth()})...")
-    # ショット数も最小限に
-    result = simulator.run(t_qc, shots=32).result()
-    counts = result.get_counts()
-    print("Raw Counts:", counts)
-    
-    # (後処理は省略、まずはカウントが出るか確認)
+    for case in test_cases:
+        print(f"\n=== Testing {case['name']} (p={case['p']}) ===")
+        print(f"Target Private Key d: {case['true_d']}")
+        
+        arith = ModularArithmetic(case['p'], case['n_qubits'])
+        ecc = QuantumECC(arith)
+        sm = ScalarMultiplication(ecc, arith, a=0) 
+        shor = ShorECDLP(sm, case['p'])
+        
+        print(f"Constructing circuit (Control Bits: {case['ctrl_bits']})...")
+        qc = shor.construct_circuit(case['ctrl_bits'], case['G'], case['Q'])
+        
+        simulator = AerSimulator(method='matrix_product_state')
+        print("Transpiling...")
+        t_qc = transpile(qc, simulator)
+        
+        print(f"Running simulation (Depth: {t_qc.depth()})...")
+        # 修正: ショット数を128に増加
+        result = simulator.run(t_qc, shots=128).result()
+        counts = result.get_counts()
+        print("Raw Counts (Top 5):", sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5])
+        
+        processor = ShorPostProcessor(case['order'], case['p'], a=0, b=7)
+        found_k = processor.solve_k(counts, case['G'], case['Q'])
+        
+        if found_k == case['true_d']:
+            print(f"SUCCESS! 🎯 Found private key: {found_k}")
+        else:
+            print(f"FAILED. Found: {found_k}, Expected: {case['true_d']}")
 
 if __name__ == "__main__":
-    verify_small_scale()
-
+    verify_qday()

@@ -1,8 +1,8 @@
 import time
 from qiskit_aer import AerSimulator
-from src.arithmetic import ModularArithmetic
-from src.ecc import QuantumECC, ScalarMultiplication
-from src.shor_ecdlp import ShorECDLP
+from general.arithmetic import ModularArithmetic
+from general.ecc import QuantumECC, ScalarMultiplication
+from general.shor_ecdlp import ShorECDLP
 from qiskit import transpile  # 追加
 
 # --- パラメータ設定 (小規模検証用) ---
